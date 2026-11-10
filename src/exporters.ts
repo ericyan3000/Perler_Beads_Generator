@@ -1,5 +1,6 @@
 import { getColor, mappedCode } from './palette';
 import type { BeadLayer, BeadProject, UsageRow } from './types';
+import type { EditRecordExtras } from './library';
 
 export type PrintExportOptions = {
   format?: 'png' | 'pdf';
@@ -17,8 +18,10 @@ const CSS_PIXEL_PPI = 96;
 const MAX_EXPORT_CANVAS_SIDE = 12000;
 const PRINT_EXPORT_SCALE = PRINT_EXPORT_PPI / CSS_PIXEL_PPI;
 
-export function downloadProjectJson(project: BeadProject): void {
-  downloadBlob(`${safeName(project.name || '\u62fc\u8c46\u7f16\u8f91\u8bb0\u5f55')}-\u7f16\u8f91\u8bb0\u5f55_perler.json`, JSON.stringify(project, null, 2), 'application/json');
+// `extras` carries the base image and generation settings as extra top-level
+// fields next to the project; importers that do not know them ignore them.
+export function downloadProjectJson(project: BeadProject, extras: EditRecordExtras = {}): void {
+  downloadBlob(`${safeName(project.name || '\u62fc\u8c46\u7f16\u8f91\u8bb0\u5f55')}-\u7f16\u8f91\u8bb0\u5f55_perler.json`, JSON.stringify({ ...project, ...extras }, null, 2), 'application/json');
 }
 
 export function downloadUsageCsv(project: BeadProject, usage: UsageRow[]): void {

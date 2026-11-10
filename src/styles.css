@@ -3983,3 +3983,210 @@ button:focus-visible {
     border-top: 1px solid var(--line-strong);
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Project library dialog
+   --------------------------------------------------------------------------- */
+
+.library-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(22, 24, 29, 0.42);
+  backdrop-filter: blur(8px);
+}
+
+.library-panel {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 12px;
+  width: min(920px, 100%);
+  max-height: min(760px, calc(100vh - 32px));
+  max-height: min(760px, calc(100dvh - 32px));
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-pop);
+  animation: panel-enter var(--dur-enter) var(--ease-out) both;
+}
+
+.library-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.library-heading {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.library-heading strong {
+  font-size: var(--font-size-display);
+  font-weight: var(--weight-semibold);
+  line-height: var(--line-tight);
+}
+
+.library-heading small {
+  color: var(--text-muted);
+  font-size: var(--font-size-small);
+  line-height: var(--line-normal);
+}
+
+.library-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.library-empty {
+  margin: 0;
+  padding: 36px 12px;
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  color: var(--text-muted);
+  font-size: var(--font-size-body);
+  text-align: center;
+}
+
+.library-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(208px, 1fr));
+  /* max-content rows: inside this scrolling grid, auto rows would otherwise
+     shrink cards (which clip their overflow) and hide their text. */
+  grid-auto-rows: max-content;
+  align-content: start;
+  gap: 12px;
+  min-height: 0;
+  margin: 0;
+  padding: 2px;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.library-card {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+}
+
+.library-card.current {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.library-thumb {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: auto;
+  min-height: 0;
+  aspect-ratio: 4 / 3;
+  padding: 12px;
+  border: 0;
+  border-bottom: 1px solid var(--line-soft);
+  border-radius: 0;
+  background: var(--surface-muted);
+  cursor: pointer;
+}
+
+.library-thumb img {
+  max-width: 100%;
+  max-height: 100%;
+  image-rendering: pixelated;
+}
+
+.library-thumb-empty {
+  width: 40%;
+  height: 40%;
+  border: 1px dashed var(--line-strong);
+  border-radius: 8px;
+}
+
+.library-badge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #ffffff;
+  font-size: var(--font-size-caption);
+  font-weight: var(--weight-semibold);
+}
+
+.library-card-body {
+  display: grid;
+  align-content: start;
+  gap: 3px;
+  min-width: 0;
+  padding: 10px 12px 8px;
+  color: var(--text-muted);
+  font-size: var(--font-size-small);
+  line-height: var(--line-normal);
+}
+
+.library-card-name {
+  overflow: hidden;
+  color: var(--text);
+  font-size: var(--font-size-control);
+  font-weight: var(--weight-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.library-rename-input {
+  width: 100%;
+  min-width: 0;
+  font-size: var(--font-size-control);
+}
+
+.library-card-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  padding: 0 8px 8px;
+}
+
+.library-card-actions button {
+  min-width: 0;
+  height: 30px;
+  min-height: 30px;
+  padding-inline: 4px;
+  overflow: hidden;
+  font-size: var(--font-size-small);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.library-card-actions .library-open:not(:disabled) {
+  border-color: rgba(23, 101, 106, 0.4);
+  color: var(--accent);
+  font-weight: var(--weight-semibold);
+}
+
+.library-card-actions .library-delete {
+  color: #b42318;
+}
+
+@media (max-width: 520px) {
+  .library-panel {
+    padding: 12px;
+  }
+
+  .library-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

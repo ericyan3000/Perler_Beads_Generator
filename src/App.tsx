@@ -6,6 +6,21 @@ import { imageFileToBeads } from './imageToBeads';
 import { basicPalette, colorDistance, completePalette, getColor, nearestPaletteColor } from './palette';
 import { composeVisibleCells, createLayer, createProject, loadDraft, normalizeProject, saveDraft, withCells, withLayers } from './project';
 import { findIsolatedBeads, summarizeUsage } from './usage';
+import {
+  blobToDataUrl,
+  dataUrlToBlob,
+  deleteProject,
+  duplicateProject,
+  listProjects,
+  loadCurrentProjectId,
+  loadProject,
+  newProjectId,
+  projectHasContent,
+  renameProject,
+  saveProject,
+  storeCurrentProjectId,
+} from './library';
+import type { BaseImage, EditRecordExtras, GenerationSettings, LibraryEntry } from './library';
 import type { ArrowKind, BackgroundMode, BeadProject, ClipboardPattern, CopyMode, GenerationStyle, MirrorDirection, MoveMode, RemoveMode, RightClickAction, ShapeFillMode, ShapeKind, TextDirection, ToolId } from './types';
 
 const { useEffect, useMemo, useRef, useState } = React;
@@ -41,6 +56,29 @@ const ui: Record<Language, any> = {
         recordImported: '编辑记录已导入，可继续编辑。',
         invalidRecord: '这个文件不是有效的拼豆编辑记录。',
         unreadableRecord: '无法读取这个编辑记录 JSON。',
+        projects: '我的项目',
+        projectsTitle: '我的项目',
+        projectsHint: '项目自动保存在本浏览器中（图纸、图层和底图）。换设备或浏览器请用“导出编辑”备份。',
+        projectsEmpty: '还没有保存的项目。生成或绘制图案后会自动保存到这里。',
+        projectsLoading: '正在读取项目...',
+        projectsUnavailable: '无法访问浏览器存储，项目库不可用（可能处于隐私浏览模式）。',
+        newProject: '新建项目',
+        currentProject: '当前',
+        openProject: '打开',
+        duplicateProject: '复制',
+        renameProject: '重命名',
+        deleteProject: '删除',
+        untitledProject: '未命名图纸',
+        hasBaseImage: '含底图',
+        projectMeta: (width: number, height: number, beads: number, colors: number) => `${width}×${height} · ${beads} 颗 · ${colors} 色`,
+        projectUpdated: (when: string) => `更新于 ${when}`,
+        confirmDeleteProject: (name: string) => `删除“${name}”？此操作无法撤销。`,
+        projectOpened: (name: string) => `已打开“${name}”。`,
+        projectDeleted: (name: string) => `已删除“${name}”。`,
+        projectDuplicated: (name: string) => `已复制为“${name}”。`,
+        projectMissing: '找不到这个项目，可能已被删除。',
+        copySuffix: ' 副本',
+        libraryFailed: '项目库操作失败：',
         printExportSettings: '图纸设置',
         showColorCodes: '显示色号',
         showGuideLines: '辅助线',
@@ -254,6 +292,29 @@ const ui: Record<Language, any> = {
         recordImported: 'Edit record imported. You can keep editing.',
         invalidRecord: 'This file is not a valid edit record.',
         unreadableRecord: 'Could not read this edit record JSON.',
+        projects: 'Projects',
+        projectsTitle: 'My projects',
+        projectsHint: 'Projects save automatically in this browser, with their layers and base image. Use “Export edit” to move one to another device or browser.',
+        projectsEmpty: 'No saved projects yet. Generate or draw a pattern and it will be saved here automatically.',
+        projectsLoading: 'Loading projects...',
+        projectsUnavailable: 'Browser storage is unavailable, so the project library cannot be used (private browsing may block it).',
+        newProject: 'New project',
+        currentProject: 'Current',
+        openProject: 'Open',
+        duplicateProject: 'Duplicate',
+        renameProject: 'Rename',
+        deleteProject: 'Delete',
+        untitledProject: 'Untitled pattern',
+        hasBaseImage: 'with image',
+        projectMeta: (width: number, height: number, beads: number, colors: number) => `${width}×${height} · ${beads} beads · ${colors} colors`,
+        projectUpdated: (when: string) => `Updated ${when}`,
+        confirmDeleteProject: (name: string) => `Delete “${name}”? This cannot be undone.`,
+        projectOpened: (name: string) => `Opened “${name}”.`,
+        projectDeleted: (name: string) => `Deleted “${name}”.`,
+        projectDuplicated: (name: string) => `Duplicated as “${name}”.`,
+        projectMissing: 'This project could not be found. It may have been deleted.',
+        copySuffix: ' copy',
+        libraryFailed: 'Project library error: ',
         printExportSettings: 'Pattern settings',
         showColorCodes: 'Color codes',
         showGuideLines: 'Guide lines',
@@ -585,6 +646,30 @@ export default function App() {
   const [layerColorLimit, setLayerColorLimit] = useState(16);
   const [past, setPast] = useState<BeadProject[]>([]);
   const [future, setFuture] = useState<BeadProject[]>([]);
+  // Project library: which library entry the open project belongs to, and the
+  // bookkeeping that keeps autosave from rewriting unchanged data.
+  const [currentProjectId, setCurrentProjectId] = useState(() => loadCurrentProjectId() ?? newProjectId());
+  const [libraryReady, setLibraryReady] = useState(false);
+  const [showLibrary, setShowLibrary] = useState(false);
+  const [libraryEntries, setLibraryEntries] = useState<LibraryEntry[] | null>(null);
+  const [libraryError, setLibraryError] = useState<string | null>(null);
+  const [renamingProjectId, setRenamingProjectId] = useState<string | null>(null);
+  const [renamingProjectName, setRenamingProjectName] = useState('');
+  const renameCancelledRef = useRef(false);
+  // A base image restored from the library must not trigger the automatic
+  // regeneration, which would overwrite the saved (edited) pattern.
+  const restoredFileRef = useRef<File | null>(null);
+  // The image last written for a project id. Also marks "this id is already in
+  // the library", so a project cleared to empty keeps saving.
+  const savedImageRef = useRef<{ projectId: string; file: File | null } | null>(null);
+  const lastSavedRef = useRef<{ projectId: string; project: BeadProject; file: File | null; generation: string } | null>(null);
+  const generationSettings = useMemo<GenerationSettings>(
+    () => ({ width: convertWidth, maxColors, generationStyle, backgroundMode, tolerance, paletteMode }),
+    [convertWidth, maxColors, generationStyle, backgroundMode, tolerance, paletteMode],
+  );
+  // Latest values for saves started outside render (timers, flush before switching).
+  const libraryStateRef = useRef({ ready: libraryReady, projectId: currentProjectId, project, file: pendingFile, generation: generationSettings });
+  libraryStateRef.current = { ready: libraryReady, projectId: currentProjectId, project, file: pendingFile, generation: generationSettings };
   const usage = useMemo(() => summarizeUsage(project), [project]);
   const totalBeads = usage.reduce((sum, row) => sum + row.count, 0);
   const totalPacks = usage.reduce((sum, row) => sum + row.packs, 0);
@@ -696,6 +781,59 @@ export default function App() {
   }, [project]);
 
   useEffect(() => {
+    storeCurrentProjectId(currentProjectId);
+  }, [currentProjectId]);
+
+  // On load the pattern comes from the localStorage draft; the base image only
+  // lives in the library, so fetch it for the current project.
+  useEffect(() => {
+    let cancelled = false;
+    const projectId = currentProjectId;
+    loadProject(projectId)
+      .then((record) => {
+        if (cancelled || !record) return;
+        const file = record.image ? restoreBaseImage(record.image, record.generation) : null;
+        savedImageRef.current = { projectId, file };
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (!cancelled) setLibraryReady(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!libraryReady) return;
+    const timer = window.setTimeout(() => {
+      void persistLibrarySnapshot();
+    }, 600);
+    return () => window.clearTimeout(timer);
+  }, [libraryReady, currentProjectId, project, pendingFile, generationSettings]);
+
+  useEffect(() => {
+    function flush() {
+      if (document.visibilityState === 'hidden') void persistLibrarySnapshot();
+    }
+    window.addEventListener('pagehide', flush);
+    document.addEventListener('visibilitychange', flush);
+    return () => {
+      window.removeEventListener('pagehide', flush);
+      document.removeEventListener('visibilitychange', flush);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!showLibrary) return;
+    function onLibraryKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape' && !event.defaultPrevented) setShowLibrary(false);
+    }
+    window.addEventListener('keydown', onLibraryKeyDown);
+    return () => window.removeEventListener('keydown', onLibraryKeyDown);
+  }, [showLibrary]);
+
+  useEffect(() => {
     localStorage.setItem(languageKey, language);
     document.documentElement.lang = language;
   }, [language]);
@@ -766,6 +904,10 @@ export default function App() {
 
   useEffect(() => {
     if (!pendingFile) return;
+    if (restoredFileRef.current === pendingFile) {
+      restoredFileRef.current = null;
+      return;
+    }
     const timer = window.setTimeout(() => {
       const shouldCommit = autoGenerateShouldCommitRef.current;
       autoGenerateShouldCommitRef.current = false;
@@ -957,13 +1099,15 @@ export default function App() {
     return () => window.removeEventListener('keydown', onHistoryKeyDown);
   }, [project, past, future]);
 
-  function startBlank(width = 52, height = 52) {
-    soloVisibilitySnapshotRef.current = null;
-    commitHistory();
+  function startBlank(width = 52, height = 52, options: { saveCurrent?: boolean } = {}) {
+    // The previous project stays in the library, so "New" is no longer an
+    // undoable edit: history is reset rather than carried into the new project.
+    if (options.saveCurrent !== false) void persistLibrarySnapshot();
+    resetEditorSession();
     setProject(createProject(width, height));
-    setClipboardPattern(null);
-    setCopySelectionIndices([]);
-    resetAdjustments();
+    setCurrentProjectId(newProjectId());
+    savedImageRef.current = null;
+    lastSavedRef.current = null;
     resetImportSettings();
     setSelectedColorId(defaultColorId);
     setRecentColorIds(defaultRecentColorIds);
@@ -1116,24 +1260,33 @@ export default function App() {
   }
 
   async function importJson(file: File) {
-    let imported: BeadProject;
+    let imported: BeadProject & EditRecordExtras;
     try {
       const text = await file.text();
-      imported = JSON.parse(text) as BeadProject;
+      imported = JSON.parse(text) as BeadProject & EditRecordExtras;
     } catch {
       throw new Error(text.unreadableRecord);
     }
     if (!imported.width || !imported.height || !Array.isArray(imported.cells)) {
       throw new Error(text.invalidRecord);
     }
-    soloVisibilitySnapshotRef.current = null;
-    commitHistory();
-    setProject(normalizeProject(imported));
-    setPendingFile(null);
-    setPendingImageUrl((current) => {
-      if (current) URL.revokeObjectURL(current);
-      return null;
-    });
+    // The image and settings are separate fields of the record, not part of
+    // the project, so strip them before the project reaches state/localStorage.
+    const { baseImage, generationSettings: importedGeneration, ...projectData } = imported;
+    let image: BaseImage | null = null;
+    if (baseImage?.dataUrl) {
+      try {
+        const blob = await dataUrlToBlob(baseImage.dataUrl);
+        image = { blob, name: baseImage.name || 'image', type: baseImage.type || blob.type };
+      } catch {
+        image = null;
+      }
+    }
+    // An imported record becomes its own library project; the one it replaces
+    // on screen is saved first.
+    void persistLibrarySnapshot();
+    switchToProject(newProjectId(), normalizeProject(projectData as BeadProject), image, importedGeneration ?? null, false);
+    setShowLibrary(false);
     setNotice(text.recordImported);
   }
 
@@ -1142,9 +1295,228 @@ export default function App() {
     setNotice(text.usageExported);
   }
 
-  function exportEditRecord() {
-    downloadProjectJson(project);
+  async function exportEditRecord() {
+    let extras: EditRecordExtras = {};
+    if (pendingFile) {
+      try {
+        extras = {
+          baseImage: { name: pendingFile.name, type: pendingFile.type, dataUrl: await blobToDataUrl(pendingFile) },
+          generationSettings,
+        };
+      } catch {
+        extras = {};
+      }
+    }
+    downloadProjectJson(project, extras);
     setNotice(text.recordExported);
+  }
+
+  // --- Project library ------------------------------------------------------
+
+  function persistLibrarySnapshot(): Promise<void> {
+    const { ready, projectId, project: snapshot, file, generation } = libraryStateRef.current;
+    if (!ready) return Promise.resolve();
+    const knownProject = savedImageRef.current?.projectId === projectId;
+    if (!knownProject && !file && !projectHasContent(snapshot)) return Promise.resolve();
+    const generationKey = file ? JSON.stringify(generation) : '';
+    const last = lastSavedRef.current;
+    if (last && last.projectId === projectId && last.project === snapshot && last.file === file && last.generation === generationKey) {
+      return Promise.resolve();
+    }
+    const imageUnchanged = knownProject && savedImageRef.current?.file === file;
+    const image: BaseImage | null | undefined = imageUnchanged ? undefined : file ? { blob: file, name: file.name, type: file.type } : null;
+    lastSavedRef.current = { projectId, project: snapshot, file, generation: generationKey };
+    savedImageRef.current = { projectId, file };
+    return saveProject(projectId, snapshot, file ? generation : null, image, file?.name ?? null).catch((error: unknown) => {
+      // Forget what we think is saved so the next change retries everything.
+      lastSavedRef.current = null;
+      savedImageRef.current = null;
+      setNotice(`${text.libraryFailed}${error instanceof Error ? error.message : String(error)}`);
+    });
+  }
+
+  function resetEditorSession() {
+    soloVisibilitySnapshotRef.current = null;
+    // Invalidate any in-flight generation so it cannot land in the next project.
+    generationRequestRef.current += 1;
+    setIsGenerating(false);
+    setPast([]);
+    setFuture([]);
+    setClipboardPattern(null);
+    setCopySelectionIndices([]);
+    setAdjustments(defaultAdjustments);
+    adjustmentSessionRef.current = { layerId: null, baseCells: [] };
+  }
+
+  function applyGenerationSettings(settings: GenerationSettings) {
+    setConvertWidth(settings.width);
+    setMaxColors(settings.maxColors);
+    setGenerationStyle(settings.generationStyle);
+    setBackgroundMode(settings.backgroundMode);
+    setTolerance(settings.tolerance);
+    setPaletteMode(settings.paletteMode);
+  }
+
+  function restoreBaseImage(image: BaseImage, generation: GenerationSettings | null): File {
+    const file = new File([image.blob], image.name, { type: image.type || image.blob.type });
+    restoredFileRef.current = file;
+    setPendingFile(file);
+    setPendingImageUrl((current) => {
+      if (current) URL.revokeObjectURL(current);
+      return URL.createObjectURL(file);
+    });
+    setReferenceFile(file);
+    setReferenceImageUrl((current) => {
+      if (current) URL.revokeObjectURL(current);
+      return URL.createObjectURL(file);
+    });
+    resetReferenceTransform();
+    if (generation) applyGenerationSettings(generation);
+    else resetImportSettings();
+    return file;
+  }
+
+  function clearBaseImage() {
+    restoredFileRef.current = null;
+    setPendingFile(null);
+    setPendingImageUrl((current) => {
+      if (current) URL.revokeObjectURL(current);
+      return null;
+    });
+    setReferenceFile(null);
+    setReferenceImageUrl((current) => {
+      if (current) URL.revokeObjectURL(current);
+      return null;
+    });
+    resetReferenceTransform();
+    resetImportSettings();
+  }
+
+  function switchToProject(
+    projectId: string,
+    nextProject: BeadProject,
+    image: BaseImage | null,
+    generation: GenerationSettings | null,
+    alreadySaved: boolean,
+  ) {
+    resetEditorSession();
+    setProject(nextProject);
+    setCurrentProjectId(projectId);
+    setReferenceVisible(false);
+    const file = image ? restoreBaseImage(image, generation) : null;
+    if (!image) clearBaseImage();
+    savedImageRef.current = alreadySaved ? { projectId, file } : null;
+    lastSavedRef.current = alreadySaved
+      ? { projectId, project: nextProject, file, generation: file && generation ? JSON.stringify(generation) : '' }
+      : null;
+  }
+
+  function libraryDisplayName(name: string | undefined, imageName: string | null): string {
+    const trimmed = name?.trim();
+    if (trimmed && trimmed !== 'Untitled Pattern') return trimmed;
+    if (imageName) return imageName.replace(/\.[^.]+$/, '');
+    return text.untitledProject;
+  }
+
+  function formatLibraryTime(iso: string): string {
+    const date = new Date(iso);
+    if (Number.isNaN(date.getTime())) return '';
+    return date.toLocaleString(language === 'zh' ? 'zh-CN' : 'en-US', { dateStyle: 'medium', timeStyle: 'short' });
+  }
+
+  function reportLibraryError(error: unknown) {
+    setNotice(`${text.libraryFailed}${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  async function refreshLibrary() {
+    try {
+      setLibraryEntries(await listProjects());
+      setLibraryError(null);
+    } catch {
+      setLibraryEntries([]);
+      setLibraryError(text.projectsUnavailable);
+    }
+  }
+
+  async function openLibrary() {
+    setShowLibrary(true);
+    setLibraryEntries(null);
+    setRenamingProjectId(null);
+    // Save first so the open project's card shows its latest state.
+    await persistLibrarySnapshot();
+    await refreshLibrary();
+  }
+
+  async function openLibraryProject(projectId: string) {
+    if (projectId === currentProjectId) {
+      setShowLibrary(false);
+      return;
+    }
+    try {
+      await persistLibrarySnapshot();
+      const record = await loadProject(projectId);
+      if (!record) {
+        setNotice(text.projectMissing);
+        await refreshLibrary();
+        return;
+      }
+      const nextProject = normalizeProject(record.project);
+      switchToProject(projectId, nextProject, record.image, record.generation, true);
+      setShowLibrary(false);
+      setNotice(text.projectOpened(libraryDisplayName(nextProject.name, record.image?.name ?? null)));
+    } catch (error) {
+      reportLibraryError(error);
+    }
+  }
+
+  async function duplicateLibraryProject(entry: LibraryEntry) {
+    const name = `${libraryDisplayName(entry.name, entry.imageName)}${text.copySuffix}`;
+    try {
+      if (entry.id === currentProjectId) await persistLibrarySnapshot();
+      await duplicateProject(entry.id, name);
+      await refreshLibrary();
+      setNotice(text.projectDuplicated(name));
+    } catch (error) {
+      reportLibraryError(error);
+    }
+  }
+
+  async function deleteLibraryProject(entry: LibraryEntry) {
+    const name = libraryDisplayName(entry.name, entry.imageName);
+    if (!window.confirm(text.confirmDeleteProject(name))) return;
+    // Leave the project before deleting it, so a pending autosave of it
+    // cannot write it back afterwards.
+    if (entry.id === currentProjectId) startBlank(52, 52, { saveCurrent: false });
+    try {
+      await deleteProject(entry.id);
+      await refreshLibrary();
+      setNotice(text.projectDeleted(name));
+    } catch (error) {
+      reportLibraryError(error);
+    }
+  }
+
+  function startProjectRename(entry: LibraryEntry) {
+    renameCancelledRef.current = false;
+    setRenamingProjectId(entry.id);
+    setRenamingProjectName(libraryDisplayName(entry.name, entry.imageName));
+  }
+
+  async function commitProjectRename(entry: LibraryEntry) {
+    const name = renamingProjectName.trim();
+    setRenamingProjectId(null);
+    if (renameCancelledRef.current) {
+      renameCancelledRef.current = false;
+      return;
+    }
+    if (!name || name === libraryDisplayName(entry.name, entry.imageName)) return;
+    try {
+      if (entry.id === currentProjectId) updateProject({ ...project, name });
+      await renameProject(entry.id, name);
+      await refreshLibrary();
+    } catch (error) {
+      reportLibraryError(error);
+    }
   }
 
   function resetClipboard() {
@@ -1567,6 +1939,7 @@ export default function App() {
 
       <div className="project-toolbar" role="toolbar" aria-label={language === 'zh' ? '编辑操作' : 'Edit actions'}>
             <div className="project-actions">
+              <button className="project-action-button" onClick={() => void openLibrary()} title={text.projectsTitle} aria-haspopup="dialog"><FolderIcon /><span>{text.projects}</span></button>
               <button className="project-action-button primary-action" onClick={() => startBlank(52, 52)}><PlusIcon /><span>{text.new}</span></button>
               <button className="project-action-button" onClick={clearCanvas}><TrashIcon /><span>{text.clear}</span></button>
               <span className="project-action-divider" aria-hidden="true" />
@@ -2839,6 +3212,101 @@ export default function App() {
           {floatingHelp.text}
         </div>
       )}
+      {showLibrary && (
+        <div
+          className="library-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="library-title"
+          onPointerDown={(event) => {
+            if (event.target === event.currentTarget) setShowLibrary(false);
+          }}
+        >
+          <div className="library-panel">
+            <div className="library-header">
+              <div className="library-heading">
+                <strong id="library-title">{text.projectsTitle}</strong>
+                <small>{text.projectsHint}</small>
+              </div>
+              <button className="print-export-close" type="button" aria-label={text.close} title={text.close} onClick={() => setShowLibrary(false)}>
+                <CloseIcon />
+              </button>
+            </div>
+            <div className="library-actions">
+              <button
+                className="project-action-button primary-action"
+                onClick={() => {
+                  startBlank(52, 52);
+                  setShowLibrary(false);
+                }}
+              >
+                <PlusIcon />
+                <span>{text.newProject}</span>
+              </button>
+              <button className="project-action-button" onClick={() => jsonInputRef.current?.click()}>
+                <span>{text.importRecordFull}</span>
+              </button>
+            </div>
+            {libraryError ? (
+              <p className="library-empty">{libraryError}</p>
+            ) : libraryEntries === null ? (
+              <p className="library-empty">{text.projectsLoading}</p>
+            ) : libraryEntries.length === 0 ? (
+              <p className="library-empty">{text.projectsEmpty}</p>
+            ) : (
+              <ul className="library-grid">
+                {libraryEntries.map((entry) => {
+                  const isCurrent = entry.id === currentProjectId;
+                  const name = libraryDisplayName(entry.name, entry.imageName);
+                  return (
+                    <li key={entry.id} className={`library-card${isCurrent ? ' current' : ''}`}>
+                      <button className="library-thumb" type="button" onClick={() => void openLibraryProject(entry.id)} aria-label={`${text.openProject} ${name}`}>
+                        {entry.thumbnail ? <img src={entry.thumbnail} alt="" /> : <span className="library-thumb-empty" aria-hidden="true" />}
+                        {isCurrent && <span className="library-badge">{text.currentProject}</span>}
+                      </button>
+                      <div className="library-card-body">
+                        {renamingProjectId === entry.id ? (
+                          <input
+                            className="library-rename-input"
+                            aria-label={text.renameProject}
+                            autoFocus
+                            value={renamingProjectName}
+                            onChange={(event) => setRenamingProjectName(event.target.value)}
+                            onBlur={() => void commitProjectRename(entry)}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter') event.currentTarget.blur();
+                              if (event.key === 'Escape') {
+                                event.preventDefault();
+                                renameCancelledRef.current = true;
+                                event.currentTarget.blur();
+                              }
+                            }}
+                          />
+                        ) : (
+                          <strong className="library-card-name" title={name}>{name}</strong>
+                        )}
+                        <span>
+                          {text.projectMeta(entry.width, entry.height, entry.beadCount, entry.colorCount)}
+                          {entry.imageName ? ` · ${text.hasBaseImage}` : ''}
+                        </span>
+                        <span>{text.projectUpdated(formatLibraryTime(entry.updatedAt))}</span>
+                      </div>
+                      <div className="library-card-actions">
+                        <button className="library-open" type="button" disabled={isCurrent} onClick={() => void openLibraryProject(entry.id)}>
+                          {isCurrent ? text.currentProject : text.openProject}
+                        </button>
+                        <button type="button" onClick={() => startProjectRename(entry)}>{text.renameProject}</button>
+                        <button type="button" onClick={() => void duplicateLibraryProject(entry)}>{text.duplicateProject}</button>
+                        <button className="library-delete" type="button" onClick={() => void deleteLibraryProject(entry)}>{text.deleteProject}</button>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+        </div>
+      )}
     </main>
   );
 }
@@ -3155,6 +3623,14 @@ function GitHubIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
       <path d="M12 2.5a9.5 9.5 0 0 0-3 18.5c.48.08.66-.2.66-.46v-1.7c-2.68.58-3.25-1.14-3.25-1.14-.44-1.1-1.07-1.4-1.07-1.4-.88-.6.07-.58.07-.58.97.07 1.48 1 1.48 1 .86 1.47 2.25 1.04 2.8.8.09-.62.34-1.04.61-1.28-2.14-.24-4.39-1.07-4.39-4.76 0-1.05.38-1.91 1-2.58-.1-.25-.43-1.24.1-2.55 0 0 .81-.26 2.66.99a9.16 9.16 0 0 1 4.84 0c1.85-1.25 2.66-.99 2.66-.99.53 1.31.2 2.3.1 2.55.62.67 1 1.53 1 2.58 0 3.7-2.26 4.51-4.4 4.75.35.3.66.9.66 1.81v2.5c0 .26.17.55.67.46A9.5 9.5 0 0 0 12 2.5z" />
+    </svg>
+  );
+}
+
+function FolderIcon() {
+  return (
+    <svg viewBox="0 0 20 20" aria-hidden="true">
+      <path d="M3 6.2c0-.8.7-1.5 1.5-1.5h3.3l1.7 1.9h6c.8 0 1.5.7 1.5 1.5v6.6c0 .8-.7 1.5-1.5 1.5h-11c-.8 0-1.5-.7-1.5-1.5z" />
     </svg>
   );
 }
