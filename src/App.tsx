@@ -21,7 +21,7 @@ import {
   storeCurrentProjectId,
 } from './library';
 import type { BaseImage, EditRecordExtras, GenerationSettings, LibraryEntry } from './library';
-import type { ArrowKind, BackgroundMode, BeadProject, ClipboardPattern, CopyMode, GenerationStyle, MirrorDirection, MoveMode, RemoveMode, RightClickAction, ShapeFillMode, ShapeKind, TextDirection, ToolId } from './types';
+import type { ArrowKind, BackgroundMode, BeadProject, ClipboardPattern, CopyMode, GenerationStyle, MirrorDirection, MoveMode, RemoveMode, RightClickAction, SelectionMode, SelectionOp, ShapeFillMode, ShapeKind, TextDirection, ToolId, WandScope } from './types';
 
 const { useEffect, useMemo, useRef, useState } = React;
 
@@ -185,6 +185,27 @@ const ui: Record<Language, any> = {
         lockHint: '锁定后无法在这一层绘制或擦除',
         unlockHint: '解锁后可以继续编辑这一层',
         lockedCanvasHint: '当前图层已锁定',
+        selectMode: '选择方式',
+        selectRectangle: '矩形',
+        selectWand: '魔棒',
+        wandScope: '魔棒范围',
+        wandConnected: '相连同色',
+        wandAll: '全部同色',
+        selectOp: '选区',
+        selectNew: '新建',
+        selectAdd: '添加',
+        selectSubtract: '减去',
+        selectHint: 'Shift 添加 · Alt/Option 减去 · Esc 取消 · Delete 删除拼豆',
+        selectionSummary: (beads: number) => `已选 ${beads} 颗`,
+        cutToLayer: '剪切到新图层',
+        copyToLayer: '复制到新图层',
+        deleteSelection: '删除',
+        deselect: '取消选择',
+        sliceLayerName: '切片',
+        selectionCut: (beads: number, name: string) => `已将 ${beads} 颗拼豆移到新图层“${name}”，可直接拖动。`,
+        selectionCopied: (beads: number, name: string) => `已将 ${beads} 颗拼豆复制到新图层“${name}”，可直接拖动。`,
+        selectionDeleted: (beads: number) => `已删除 ${beads} 颗拼豆。`,
+        selectionHasNoBeads: '选区内没有当前图层的拼豆。',
         manyColors: '颜色较多，可以降低颜色数量。',
         countedLayers: (count: number) => `已计入 ${count} 个图层`,
         noCountedLayers: '没有图层计入用量。',
@@ -257,6 +278,7 @@ const ui: Record<Language, any> = {
             remove: { title: '消除', hint: '清除连续区域' },
             recolor: { title: '换色', hint: '替换同色拼豆' },
             eyedropper: { title: '吸管', hint: '拾取颜色' },
+            select: { title: '选择', hint: '框选或魔棒选择拼豆' },
             move: { title: '移动', hint: '移动当前图层图案' },
             copy: { title: '复制', hint: '复制连续图案' },
             paste: { title: '粘贴', hint: '粘贴已复制图案' },
@@ -421,6 +443,27 @@ const ui: Record<Language, any> = {
         lockHint: 'Lock this layer to prevent drawing or erasing on it',
         unlockHint: 'Unlock this layer to edit it again',
         lockedCanvasHint: 'Current layer is locked',
+        selectMode: 'Select by',
+        selectRectangle: 'Rectangle',
+        selectWand: 'Magic wand',
+        wandScope: 'Wand picks',
+        wandConnected: 'Connected',
+        wandAll: 'All same color',
+        selectOp: 'Selection',
+        selectNew: 'New',
+        selectAdd: 'Add',
+        selectSubtract: 'Subtract',
+        selectHint: 'Shift: add · Alt/Option: subtract · Esc: deselect · Delete: remove beads',
+        selectionSummary: (beads: number) => `${beads} ${beads === 1 ? 'bead' : 'beads'} selected`,
+        cutToLayer: 'Cut to new layer',
+        copyToLayer: 'Copy to new layer',
+        deleteSelection: 'Delete',
+        deselect: 'Deselect',
+        sliceLayerName: 'Slice',
+        selectionCut: (beads: number, name: string) => `Moved ${beads} beads to new layer “${name}”. Drag to move it.`,
+        selectionCopied: (beads: number, name: string) => `Copied ${beads} beads to new layer “${name}”. Drag to move it.`,
+        selectionDeleted: (beads: number) => `Deleted ${beads} beads.`,
+        selectionHasNoBeads: 'The selection has no beads on the current layer.',
         manyColors: 'Many colors; consider lowering max colors.',
         countedLayers: (count: number) => `${count} layers counted`,
         noCountedLayers: 'No layers counted in usage.',
@@ -493,6 +536,7 @@ const ui: Record<Language, any> = {
             remove: { title: 'Clear', hint: 'Clear connected area' },
             recolor: { title: 'Recolor', hint: 'Replace matching beads' },
             eyedropper: { title: 'Dropper', hint: 'Pick color' },
+            select: { title: 'Select', hint: 'Select beads with a rectangle or magic wand' },
             move: { title: 'Move', hint: 'Move active layer artwork' },
             copy: { title: 'Copy', hint: 'Copy connected pattern' },
             paste: { title: 'Paste', hint: 'Paste copied pattern' },
@@ -511,6 +555,7 @@ const tools: Array<{ id: ToolId; shortcut: string }> = [
   { id: 'remove', shortcut: 'D' },
   { id: 'recolor', shortcut: 'R' },
   { id: 'eyedropper', shortcut: 'I' },
+  { id: 'select', shortcut: 'S' },
   { id: 'move', shortcut: 'M' },
   { id: 'copy', shortcut: 'C' },
   { id: 'paste', shortcut: 'V' },
@@ -608,6 +653,12 @@ export default function App() {
   const [showTextOptions, setShowTextOptions] = useState(false);
   const [showClipboardOptions, setShowClipboardOptions] = useState(false);
   const [showPanOptions, setShowPanOptions] = useState(false);
+  const [showSelectOptions, setShowSelectOptions] = useState(false);
+  const [selectionMode, setSelectionMode] = useState<SelectionMode>('rectangle');
+  const [wandScope, setWandScope] = useState<WandScope>('connected');
+  const [selectionOp, setSelectionOp] = useState<SelectionOp>('replace');
+  // Cell indices; applies to whichever layer is active when an action runs.
+  const [selectionIndices, setSelectionIndices] = useState<number[]>([]);
   const [clipboardPattern, setClipboardPattern] = useState<ClipboardPattern | null>(null);
   const [copyMode, setCopyMode] = useState<CopyMode>('connected');
   const [copySelectionIndices, setCopySelectionIndices] = useState<number[]>([]);
@@ -943,7 +994,18 @@ export default function App() {
     setShowTextOptions(nextTool === 'text' && !closingTextOptions);
     setShowClipboardOptions(nextTool === 'copy' || nextTool === 'paste');
     setShowPanOptions(nextTool === 'pan');
+    setShowSelectOptions(nextTool === 'select');
   }
+
+  // Only the Select tool shows and acts on the selection, so drop it when
+  // leaving the tool, and whenever the grid size changes (indices shift).
+  useEffect(() => {
+    if (tool !== 'select') setSelectionIndices([]);
+  }, [tool]);
+
+  useEffect(() => {
+    setSelectionIndices([]);
+  }, [project.width, project.height]);
 
   useEffect(() => {
     function onToolKeyDown(event: KeyboardEvent) {
@@ -1134,6 +1196,85 @@ export default function App() {
     updateProject(withCells(project, Array.from({ length: project.width * project.height }, () => null)));
     setNotice(language === 'zh' ? '画布已清空。' : 'Canvas cleared.');
   }
+
+  /** Beads of the active layer inside the selection. */
+  function selectedBeadIndices(): number[] {
+    return selectionIndices.filter((index) => Boolean(activeLayer.cells[index]));
+  }
+
+  // "Slicing": lift the selected beads onto their own layer, directly above
+  // the current one, then switch to Move so the slice can be dragged.
+  function selectionToNewLayer(mode: 'cut' | 'copy') {
+    if (mode === 'cut' && activeLayer.locked) {
+      setNotice(text.lockedCanvasHint);
+      return;
+    }
+    const picked = selectedBeadIndices();
+    if (picked.length === 0) {
+      setNotice(text.selectionHasNoBeads);
+      return;
+    }
+    const pickedSet = new Set(picked);
+    const sliceNumbers = layers
+      .map((layer) => layer.name.match(/^(?:Slice|切片) (\d+)$/))
+      .flatMap((match) => (match ? [Number(match[1])] : []));
+    const name = `${text.sliceLayerName} ${Math.max(0, ...sliceNumbers) + 1}`;
+    const slice = {
+      ...createLayer(project.width, project.height, name),
+      customName: true,
+      cells: activeLayer.cells.map((cell, index) => (pickedSet.has(index) ? cell : null)),
+    };
+    const nextLayers = layers.flatMap((layer) => {
+      if (layer.id !== activeLayer.id) return [layer];
+      const source = mode === 'cut' ? { ...layer, cells: layer.cells.map((cell, index) => (pickedSet.has(index) ? null : cell)) } : layer;
+      return [source, slice];
+    });
+    commitHistory();
+    updateProject(withLayers(project, nextLayers, slice.id));
+    setSelectionIndices([]);
+    setMoveMode('layer');
+    activateTool('move');
+    setShowMoveOptions(false);
+    setNotice(mode === 'cut' ? text.selectionCut(picked.length, name) : text.selectionCopied(picked.length, name));
+  }
+
+  function deleteSelectedBeads() {
+    if (activeLayer.locked) {
+      setNotice(text.lockedCanvasHint);
+      return;
+    }
+    const picked = selectedBeadIndices();
+    if (picked.length === 0) {
+      setNotice(text.selectionHasNoBeads);
+      return;
+    }
+    const pickedSet = new Set(picked);
+    commitHistory();
+    updateProject(withCells(project, activeLayer.cells.map((cell, index) => (pickedSet.has(index) ? null : cell))));
+    setSelectionIndices([]);
+    setNotice(text.selectionDeleted(picked.length));
+  }
+
+  useEffect(() => {
+    if (tool !== 'select') return;
+    function onSelectionKeyDown(event: KeyboardEvent) {
+      if (event.defaultPrevented || event.isComposing) return;
+      const target = event.target;
+      if (target instanceof HTMLElement && (target.isContentEditable || target.closest('input, textarea, select, [role="textbox"]'))) return;
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'a') {
+        event.preventDefault();
+        setSelectionIndices(Array.from({ length: project.width * project.height }, (_, index) => index));
+      } else if (event.key === 'Escape' && selectionIndices.length > 0) {
+        event.preventDefault();
+        setSelectionIndices([]);
+      } else if ((event.key === 'Delete' || event.key === 'Backspace') && selectionIndices.length > 0) {
+        event.preventDefault();
+        deleteSelectedBeads();
+      }
+    }
+    window.addEventListener('keydown', onSelectionKeyDown);
+    return () => window.removeEventListener('keydown', onSelectionKeyDown);
+  }, [tool, selectionIndices, project]);
 
   function resizeCanvas() {
     const width = clampInteger(canvasWidth, 8, 180);
@@ -1344,6 +1485,7 @@ export default function App() {
     setFuture([]);
     setClipboardPattern(null);
     setCopySelectionIndices([]);
+    setSelectionIndices([]);
     setAdjustments(defaultAdjustments);
     adjustmentSessionRef.current = { layerId: null, baseCells: [] };
   }
@@ -2225,6 +2367,43 @@ export default function App() {
             </div>
           </div>
         )}
+        {tool === 'select' && showSelectOptions && (
+          <div className="tool-options select-options" onMouseLeave={() => setShowSelectOptions(false)}>
+            <div className="right-click-toggle compact" aria-label={text.selectMode}>
+              <span>{text.selectMode}</span>
+              <div>
+                {(['rectangle', 'wand'] as SelectionMode[]).map((mode) => (
+                  <button key={mode} className={selectionMode === mode ? 'active' : ''} type="button" aria-pressed={selectionMode === mode} onClick={() => setSelectionMode(mode)}>
+                    {mode === 'rectangle' ? text.selectRectangle : text.selectWand}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {selectionMode === 'wand' && (
+              <div className="right-click-toggle compact" aria-label={text.wandScope}>
+                <span>{text.wandScope}</span>
+                <div>
+                  {(['connected', 'all'] as WandScope[]).map((scope) => (
+                    <button key={scope} className={wandScope === scope ? 'active' : ''} type="button" aria-pressed={wandScope === scope} onClick={() => setWandScope(scope)}>
+                      {scope === 'connected' ? text.wandConnected : text.wandAll}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            <div className="right-click-toggle compact select-op-toggle" aria-label={text.selectOp}>
+              <span>{text.selectOp}</span>
+              <div>
+                {(['replace', 'add', 'subtract'] as SelectionOp[]).map((op) => (
+                  <button key={op} className={selectionOp === op ? 'active' : ''} type="button" aria-pressed={selectionOp === op} onClick={() => setSelectionOp(op)}>
+                    {op === 'replace' ? text.selectNew : op === 'add' ? text.selectAdd : text.selectSubtract}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <p className="tool-hint compact-hint">{text.selectHint}</p>
+          </div>
+        )}
         {tool === 'move' && showMoveOptions && (
           <div className="tool-options move-options" onMouseLeave={() => setShowMoveOptions(false)}>
             <div className="right-click-toggle compact" aria-label={text.moveScope}>
@@ -2537,6 +2716,22 @@ export default function App() {
         clipboardPattern={clipboardPattern}
         copyMode={copyMode}
         copySelectionIndices={copySelectionIndices}
+        selectionMode={selectionMode}
+        wandScope={wandScope}
+        selectionOp={selectionOp}
+        selectionIndices={selectionIndices}
+        onSelectionChange={setSelectionIndices}
+        overlay={
+          tool === 'select' && selectionIndices.length > 0 ? (
+            <div className="selection-bar" role="toolbar" aria-label={text.selectOp}>
+              <span className="selection-bar-count">{text.selectionSummary(selectedBeadIndices().length)}</span>
+              <button type="button" className="selection-bar-primary" disabled={activeLayer.locked} onClick={() => selectionToNewLayer('cut')}>{text.cutToLayer}</button>
+              <button type="button" onClick={() => selectionToNewLayer('copy')}>{text.copyToLayer}</button>
+              <button type="button" className="selection-bar-danger" disabled={activeLayer.locked} onClick={deleteSelectedBeads}>{text.deleteSelection}</button>
+              <button type="button" onClick={() => setSelectionIndices([])}>{text.deselect}</button>
+            </div>
+          ) : null
+        }
         onCopyPattern={(pattern, switchToPaste = true) => {
           const beads = pattern.cells.filter(Boolean).length;
           setClipboardPattern(pattern);
@@ -3790,6 +3985,13 @@ function ToolIcon({ tool }: { tool: ToolId }) {
         <path d="M18 16.5h-7.2c-2.2 0-4-1.8-4-4v-.3" />
         <path d="M15 19.5l3-3-3-3" />
         <path d="M8 16.2c.9 1.2 1.3 2 1.3 2.6 0 1-.7 1.7-1.7 1.7S6 19.8 6 18.8c0-.6.4-1.4 1.3-2.6.2-.3.5-.3.7 0z" />
+      </svg>
+    );
+  }
+  if (tool === 'select') {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M4 7V4h3M10 4h4M17 4h3v3M20 10v4M20 17v3h-3M14 20h-4M7 20H4v-3M4 14v-4" />
       </svg>
     );
   }

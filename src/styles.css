@@ -1670,11 +1670,16 @@ button:focus-visible {
 }
 
 .tool-rail {
+  /* Tool option panels are positioned from these, so they stay next to their
+     button when the rail compacts on shorter screens (see max-height queries). */
+  --tool-button-height: 58px;
+  --tool-gap: 7px;
+  --tool-step: calc(var(--tool-button-height) + var(--tool-gap));
   position: relative;
   z-index: 4;
   display: grid;
   align-content: start;
-  gap: 7px;
+  gap: var(--tool-gap);
   padding: 10px 6px;
   border-right: 1px solid var(--line-strong);
   background:
@@ -1799,7 +1804,7 @@ button:focus-visible {
   align-content: center;
   gap: 4px;
   width: 72px;
-  height: 58px;
+  height: var(--tool-button-height);
   padding: 6px 7px;
   border-color: transparent;
   background: transparent;
@@ -1884,7 +1889,7 @@ button:focus-visible {
 .tool-options {
   position: absolute;
   left: calc(100% + 8px);
-  top: 75px;
+  top: calc(10px + var(--tool-step));
   z-index: 8;
   display: grid;
   gap: 8px;
@@ -1900,42 +1905,42 @@ button:focus-visible {
 }
 
 .pencil-options {
-  top: 10px;
+  top: calc(10px + var(--tool-step) * 0);
 }
 
 .eraser-options {
-  top: 75px;
+  top: calc(10px + var(--tool-step) * 1);
 }
 
 .remove-options {
-  top: 205px;
+  top: calc(10px + var(--tool-step) * 3);
 }
 
 .move-options {
-  top: 400px;
+  top: calc(10px + var(--tool-step) * 7);
 }
 
 .copy-options {
-  top: 465px;
+  top: calc(10px + var(--tool-step) * 8);
 }
 
 .paste-options {
-  top: 530px;
+  top: calc(10px + var(--tool-step) * 9);
 }
 
 .mirror-options {
-  top: 595px;
+  top: calc(10px + var(--tool-step) * 10);
 }
 
 .shape-options {
-  top: 660px;
+  top: calc(10px + var(--tool-step) * 11);
   width: 184px;
   gap: 8px;
   padding: 9px;
 }
 
 .text-options {
-  top: 725px;
+  top: calc(10px + var(--tool-step) * 12);
   width: 184px;
 }
 
@@ -1964,8 +1969,17 @@ button:focus-visible {
   stroke-linejoin: round;
 }
 
+.select-options {
+  top: calc(10px + var(--tool-step) * 6);
+  width: 196px;
+}
+
+.select-op-toggle > div {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .pan-options {
-  top: 790px;
+  top: calc(10px + var(--tool-step) * 13);
   width: 168px;
 }
 
@@ -2377,7 +2391,8 @@ button:focus-visible {
   cursor: ew-resize;
 }
 
-.canvas[data-tool='shape'] {
+.canvas[data-tool='shape'],
+.canvas[data-tool='select'] {
   cursor: crosshair;
 }
 
@@ -4189,4 +4204,116 @@ button:focus-visible {
   .library-grid {
     grid-template-columns: minmax(0, 1fr);
   }
+}
+
+/* ---------------------------------------------------------------------------
+   Compact tool rail: 14 tools need ~913px at full size, more than the rail
+   gets on laptop screens, which cut off the last tools. Shrink the buttons
+   in steps so every tool stays reachable down to about 768px tall.
+   --------------------------------------------------------------------------- */
+
+@media (max-height: 960px) {
+  .tool-rail {
+    --tool-button-height: 50px;
+    --tool-gap: 4px;
+  }
+
+  .tool-button {
+    padding-block: 4px;
+  }
+
+  .tool-button svg {
+    width: 21px;
+    height: 21px;
+  }
+}
+
+@media (max-height: 860px) {
+  .tool-rail {
+    --tool-button-height: 44px;
+  }
+
+  .tool-button {
+    gap: 2px;
+    padding-block: 3px;
+  }
+
+  .tool-button svg {
+    width: 19px;
+    height: 19px;
+  }
+}
+
+@media (max-height: 790px) {
+  .tool-rail {
+    --tool-button-height: 40px;
+    --tool-gap: 3px;
+  }
+
+  .tool-button svg {
+    width: 17px;
+    height: 17px;
+  }
+
+  .tool-button span {
+    font-size: var(--font-size-caption);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Selection action bar (Select tool, shown while something is selected)
+   --------------------------------------------------------------------------- */
+
+.selection-bar {
+  /* Sized to fit inside the 44px margin "Fit" leaves above the board, and
+     click-through except on its buttons, so it never blocks the top rows. */
+  position: absolute;
+  top: 4px;
+  left: 50%;
+  z-index: 6;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: max-content;
+  max-width: calc(100% - 24px);
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: rgba(255, 253, 248, 0.97);
+  box-shadow: var(--shadow-pop);
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.selection-bar button {
+  pointer-events: auto;
+}
+
+.selection-bar-count {
+  padding-inline: 6px 2px;
+  color: var(--text-muted);
+  font-size: var(--font-size-small);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+}
+
+.selection-bar button {
+  height: 28px;
+  min-height: 28px;
+  padding-inline: 10px;
+  font-size: var(--font-size-small);
+  white-space: nowrap;
+}
+
+.selection-bar .selection-bar-primary:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #ffffff;
+  font-weight: var(--weight-semibold);
+}
+
+.selection-bar .selection-bar-danger:not(:disabled) {
+  color: #b42318;
 }

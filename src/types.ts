@@ -1,6 +1,13 @@
 export type BrandId = 'MARD';
 
-export type ToolId = 'pencil' | 'eraser' | 'fill' | 'remove' | 'recolor' | 'eyedropper' | 'move' | 'copy' | 'paste' | 'mirror' | 'shape' | 'text' | 'pan';
+export type ToolId = 'pencil' | 'eraser' | 'fill' | 'remove' | 'recolor' | 'eyedropper' | 'select' | 'move' | 'copy' | 'paste' | 'mirror' | 'shape' | 'text' | 'pan';
+
+// Selection tool. The lasso will join these modes later; every mode produces
+// the same thing, a set of cell indices, combined with the current selection
+// according to SelectionOp.
+export type SelectionMode = 'rectangle' | 'wand';
+export type WandScope = 'connected' | 'all';
+export type SelectionOp = 'replace' | 'add' | 'subtract';
 
 export type ClipboardPattern = {
   width: number;

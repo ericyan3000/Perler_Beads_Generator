@@ -1,5 +1,5 @@
 import { getColor } from './palette';
-import type { ArrowKind, BeadLayer, BeadProject, ClipboardPattern, CopyMode, MirrorDirection, MoveMode, RemoveMode, ShapeFillMode, ShapeKind, TextDirection, ToolId } from './types';
+import type { ArrowKind, BeadLayer, BeadProject, ClipboardPattern, CopyMode, MirrorDirection, MoveMode, RemoveMode, SelectionMode, SelectionOp, ShapeFillMode, ShapeKind, TextDirection, ToolId, WandScope } from './types';
 
 const { useEffect, useMemo, useRef, useState } = React;
 
@@ -24,6 +24,20 @@ type ShapeDraft = {
 };
 
 type ReferenceImagePlacement = 'below' | 'above';
+
+type SelectionDraft = {
+  start: { x: number; y: number };
+  end: { x: number; y: number };
+  op: SelectionOp;
+};
+
+type SelectionRender = {
+  active: boolean;
+  indices: number[];
+  draft: SelectionDraft | null;
+  mode: SelectionMode;
+  wandScope: WandScope;
+};
 
 type ReferenceImageRenderOptions = {
   image: HTMLImageElement | null;
@@ -67,6 +81,13 @@ type Props = {
   clipboardPattern: ClipboardPattern | null;
   copyMode: CopyMode;
   copySelectionIndices: number[];
+  selectionMode: SelectionMode;
+  wandScope: WandScope;
+  selectionOp: SelectionOp;
+  selectionIndices: number[];
+  onSelectionChange: (indices: number[]) => void;
+  /** Rendered over the canvas, e.g. the selection action bar. */
+  overlay?: React.ReactNode;
   onCommitStart: () => void;
   onCellsChange: (cells: Array<string | null>) => void;
   onReplaceColor: (sourceColorId: string) => void;
@@ -113,6 +134,12 @@ export default function WorkspaceCanvas({
   clipboardPattern,
   copyMode,
   copySelectionIndices,
+  selectionMode,
+  wandScope,
+  selectionOp,
+  selectionIndices,
+  onSelectionChange,
+  overlay,
   onCommitStart,
   onCellsChange,
   onReplaceColor,
@@ -133,6 +160,7 @@ export default function WorkspaceCanvas({
   const [isSpaceDown, setIsSpaceDown] = useState(false);
   const [hoverPoint, setHoverPoint] = useState<PointerGridPoint | null>(null);
   const [shapeDraft, setShapeDraft] = useState<ShapeDraft | null>(null);
+  const [selectionDraft, setSelectionDraft] = useState<SelectionDraft | null>(null);
   const [referenceImage, setReferenceImage] = useState<HTMLImageElement | null>(null);
   const [activePointerMode, setActivePointerMode] = useState<'pan' | 'rightErase' | 'move' | 'shape' | 'reference' | null>(null);
   const pointerRef = useRef({
@@ -144,6 +172,10 @@ export default function WorkspaceCanvas({
     draggingReference: false,
     copySelecting: false,
     shaping: false,
+    selecting: false,
+    selectStartX: 0,
+    selectStartY: 0,
+    selectOp: 'replace' as SelectionOp,
     pointerId: 0,
     lastX: 0,
     lastY: 0,
@@ -178,6 +210,10 @@ export default function WorkspaceCanvas({
       placement: referenceImagePlacement,
     }),
     [referenceImage, referenceImageVisible, referenceImageOpacity, referenceImageScale, referenceImageOffset, referenceImagePlacement],
+  );
+  const selectionRender = useMemo<SelectionRender>(
+    () => ({ active: tool === 'select', indices: selectionIndices, draft: selectionDraft, mode: selectionMode, wandScope }),
+    [tool, selectionIndices, selectionDraft, selectionMode, wandScope],
   );
 
   useEffect(() => {
@@ -233,8 +269,8 @@ export default function WorkspaceCanvas({
     canvas.style.width = `${wrapper.clientWidth}px`;
     canvas.style.height = `${wrapper.clientHeight}px`;
     context.setTransform(dpr, 0, 0, dpr, 0, 0);
-    drawPattern(context, project, cellSize, zoom, pan, highlightedColorId, highlightedCellIndices, tool, selectedColorId, eraserSize, moveMode, removeMode, mirrorMode, clipboardPattern, copyMode, copySelectionIndices, shapeDraft, hoverPoint, canEdit, referenceImageOptions, textToolValue, textToolDirection, textToolSize, textToolSpacing, formatColorCode);
-  }, [project, cellSize, zoom, pan, highlightedColorId, highlightedCellIndices, tool, selectedColorId, eraserSize, moveMode, removeMode, mirrorMode, clipboardPattern, copyMode, copySelectionIndices, shapeKind, shapeDraft, hoverPoint, canEdit, referenceImageOptions, textToolValue, textToolDirection, textToolSize, textToolSpacing, formatColorCode]);
+    drawPattern(context, project, cellSize, zoom, pan, highlightedColorId, highlightedCellIndices, tool, selectedColorId, eraserSize, moveMode, removeMode, mirrorMode, clipboardPattern, copyMode, copySelectionIndices, shapeDraft, hoverPoint, canEdit, referenceImageOptions, textToolValue, textToolDirection, textToolSize, textToolSpacing, formatColorCode, selectionRender);
+  }, [project, cellSize, zoom, pan, highlightedColorId, highlightedCellIndices, tool, selectedColorId, eraserSize, moveMode, removeMode, mirrorMode, clipboardPattern, copyMode, copySelectionIndices, shapeKind, shapeDraft, hoverPoint, canEdit, referenceImageOptions, textToolValue, textToolDirection, textToolSize, textToolSpacing, formatColorCode, selectionRender]);
 
   useEffect(() => {
     const observer = new ResizeObserver(() => {
@@ -249,7 +285,7 @@ export default function WorkspaceCanvas({
       const context = canvas.getContext('2d');
       if (context) {
         context.setTransform(dpr, 0, 0, dpr, 0, 0);
-        drawPattern(context, project, cellSize, zoom, pan, highlightedColorId, highlightedCellIndices, tool, selectedColorId, eraserSize, moveMode, removeMode, mirrorMode, clipboardPattern, copyMode, copySelectionIndices, shapeDraft, hoverPoint, canEdit, referenceImageOptions, textToolValue, textToolDirection, textToolSize, textToolSpacing, formatColorCode);
+        drawPattern(context, project, cellSize, zoom, pan, highlightedColorId, highlightedCellIndices, tool, selectedColorId, eraserSize, moveMode, removeMode, mirrorMode, clipboardPattern, copyMode, copySelectionIndices, shapeDraft, hoverPoint, canEdit, referenceImageOptions, textToolValue, textToolDirection, textToolSize, textToolSpacing, formatColorCode, selectionRender);
       }
       setPan((current) => {
         const next = constrainPan(current, zoom);
@@ -258,7 +294,7 @@ export default function WorkspaceCanvas({
     });
     if (wrapperRef.current) observer.observe(wrapperRef.current);
     return () => observer.disconnect();
-  }, [project, cellSize, zoom, pan, highlightedColorId, highlightedCellIndices, tool, selectedColorId, eraserSize, moveMode, removeMode, mirrorMode, clipboardPattern, copyMode, copySelectionIndices, shapeKind, shapeDraft, hoverPoint, canEdit, referenceImageOptions, textToolValue, textToolDirection, textToolSize, textToolSpacing, formatColorCode]);
+  }, [project, cellSize, zoom, pan, highlightedColorId, highlightedCellIndices, tool, selectedColorId, eraserSize, moveMode, removeMode, mirrorMode, clipboardPattern, copyMode, copySelectionIndices, shapeKind, shapeDraft, hoverPoint, canEdit, referenceImageOptions, textToolValue, textToolDirection, textToolSize, textToolSpacing, formatColorCode, selectionRender]);
 
   function handlePointerDown(event: React.PointerEvent<HTMLCanvasElement>) {
     const point = canvasToGridPoint(event.clientX, event.clientY);
@@ -273,6 +309,7 @@ export default function WorkspaceCanvas({
     pointerRef.current.draggingReference = false;
     pointerRef.current.copySelecting = false;
     pointerRef.current.shaping = false;
+    pointerRef.current.selecting = false;
     event.currentTarget.setPointerCapture(event.pointerId);
 
     if (referenceImageAdjusting && referenceImageVisible && event.button === 0) {
@@ -303,6 +340,25 @@ export default function WorkspaceCanvas({
       pointerRef.current.lastGridX = point?.gridX ?? cell.x + 0.5;
       pointerRef.current.lastGridY = point?.gridY ?? cell.y + 0.5;
       applyTool(cell.x, cell.y, pointerRef.current.lastGridX, pointerRef.current.lastGridY);
+      return;
+    }
+
+    if (tool === 'select' && event.button === 0) {
+      // Shift / Alt(Option) override the sticky op from the options panel,
+      // which is what touch users (no modifier keys) rely on.
+      const op: SelectionOp = event.shiftKey ? 'add' : event.altKey ? 'subtract' : selectionOp;
+      if (selectionMode === 'wand') {
+        const cells = getActiveLayerCells(project);
+        const picked = collectWandIndices(cells, project.width, project.height, cell.x, cell.y, wandScope);
+        onSelectionChange(combineSelection(selectionIndices, picked, op));
+        return;
+      }
+      pointerRef.current.drawing = true;
+      pointerRef.current.selecting = true;
+      pointerRef.current.selectStartX = cell.x;
+      pointerRef.current.selectStartY = cell.y;
+      pointerRef.current.selectOp = op;
+      setSelectionDraft({ start: cell, end: cell, op });
       return;
     }
 
@@ -479,10 +535,17 @@ export default function WorkspaceCanvas({
       return;
     }
 
-    const point = canvasToGridPoint(event.clientX, event.clientY, pointerRef.current.movingPattern);
+    const point = canvasToGridPoint(event.clientX, event.clientY, pointerRef.current.movingPattern || pointerRef.current.selecting);
     const cell = point?.cell ?? null;
     setHoverPoint(point);
     onHover(cell ? { ...cell, colorId: getTopVisibleColor(project, cell.y * project.width + cell.x) } : null);
+    if (pointerRef.current.selecting) {
+      if (point) {
+        const end = clampedCell(point);
+        setSelectionDraft((draft) => (draft && (draft.end.x !== end.x || draft.end.y !== end.y) ? { ...draft, end } : draft));
+      }
+      return;
+    }
     if (pointerRef.current.copySelecting) {
       if (cell) {
         applyCopySelection(linePoints(pointerRef.current.lastCellX, pointerRef.current.lastCellY, cell.x, cell.y));
@@ -554,6 +617,22 @@ export default function WorkspaceCanvas({
   }
 
   function handlePointerUp(event: React.PointerEvent<HTMLCanvasElement>) {
+    if (pointerRef.current.selecting) {
+      // Take the end from this event, not from selectionDraft state: on a
+      // fast drag the last pointermove's state update may not have rendered
+      // yet, which would drop the final row/column.
+      const point = canvasToGridPoint(event.clientX, event.clientY, true);
+      const start = { x: pointerRef.current.selectStartX, y: pointerRef.current.selectStartY };
+      const end = point ? clampedCell(point) : (selectionDraft?.end ?? start);
+      const op = pointerRef.current.selectOp;
+      if (op === 'replace' && start.x === end.x && start.y === end.y) {
+        // A plain click (no drag) clears the selection, as in most editors.
+        onSelectionChange([]);
+      } else {
+        onSelectionChange(combineSelection(selectionIndices, rectangleIndices(start, end, project.width), op));
+      }
+    }
+    setSelectionDraft(null);
     if (pointerRef.current.shaping) {
       const draft = shapeDraft ?? {
         kind: shapeKind,
@@ -577,6 +656,7 @@ export default function WorkspaceCanvas({
     pointerRef.current.draggingReference = false;
     pointerRef.current.copySelecting = false;
     pointerRef.current.shaping = false;
+    pointerRef.current.selecting = false;
     pointerRef.current.moveOriginCells = [];
     pointerRef.current.moveSelectionIndices = [];
     pointerRef.current.copySelectionSet = new Set<number>();
@@ -760,6 +840,13 @@ export default function WorkspaceCanvas({
     return { cell, gridX, gridY };
   }
 
+  function clampedCell(point: PointerGridPoint): { x: number; y: number } {
+    return {
+      x: Math.min(project.width - 1, Math.max(0, Math.floor(point.gridX))),
+      y: Math.min(project.height - 1, Math.max(0, Math.floor(point.gridY))),
+    };
+  }
+
   function screenToWorld(x: number, y: number): { x: number; y: number } {
     return {
       x: (x - pan.x) / zoom,
@@ -793,6 +880,7 @@ export default function WorkspaceCanvas({
       <div className="board-chip">
         {project.width} * {project.height}
       </div>
+      {overlay}
       {!canEdit && <div className="canvas-lock-hint">{lockedHint}</div>}
       {referenceImageAdjusting && referenceImageVisible && (
         <div className="reference-adjust-hint">{referenceAdjustHint}</div>
@@ -832,7 +920,8 @@ function drawPattern(
   textToolDirection: TextDirection,
   textToolSize: number,
   textToolSpacing: number,
-  formatColorCode?: (colorId: string) => string,
+  formatColorCode: ((colorId: string) => string) | undefined,
+  selection: SelectionRender,
 ): void {
   const canvasWidth = context.canvas.width / (window.devicePixelRatio || 1);
   const canvasHeight = context.canvas.height / (window.devicePixelRatio || 1);
@@ -911,6 +1000,7 @@ function drawPattern(
   if (project.settings.showGrid) drawGrid(context, project, cellSize);
   if (project.settings.showPegboardBoundaries) drawPegboardBoundaries(context, project, cellSize);
   if (project.settings.showCoordinates && cellSize * zoom > 10) drawCoordinates(context, project, cellSize);
+  drawSelection(context, project, cellSize, zoom, selection, hoverPoint);
   if (tool === 'eraser' && hoverPoint && canEdit && eraserSize > 0) {
     drawBrushCursor(context, hoverPoint.gridX, hoverPoint.gridY, eraserSize, cellSize);
   }
@@ -1965,6 +2055,122 @@ function collectConnectedCellIndices(
     stack.push([cx + 1, cy], [cx - 1, cy], [cx, cy + 1], [cx, cy - 1]);
   }
   return [...seen];
+}
+
+// --- Selection ---------------------------------------------------------------
+
+function rectangleIndices(start: { x: number; y: number }, end: { x: number; y: number }, width: number): number[] {
+  const indices: number[] = [];
+  const minX = Math.min(start.x, end.x);
+  const maxX = Math.max(start.x, end.x);
+  const minY = Math.min(start.y, end.y);
+  const maxY = Math.max(start.y, end.y);
+  for (let y = minY; y <= maxY; y += 1) {
+    for (let x = minX; x <= maxX; x += 1) indices.push(y * width + x);
+  }
+  return indices;
+}
+
+/** Magic wand: beads of the clicked colour, touching it or anywhere. Empty cells select nothing. */
+function collectWandIndices(cells: Array<string | null>, width: number, height: number, x: number, y: number, scope: WandScope): number[] {
+  if (!cells[y * width + x]) return [];
+  return scope === 'all' ? collectSameColorIndices(cells, x, y, width) : collectConnectedCellIndices(cells, width, height, x, y);
+}
+
+function combineSelection(current: number[], incoming: number[], op: SelectionOp): number[] {
+  const next = op === 'replace' ? new Set<number>() : new Set(current);
+  if (op === 'subtract') incoming.forEach((index) => next.delete(index));
+  else incoming.forEach((index) => next.add(index));
+  return [...next].sort((a, b) => a - b);
+}
+
+function drawSelection(
+  context: CanvasRenderingContext2D,
+  project: BeadProject,
+  cellSize: number,
+  zoom: number,
+  selection: SelectionRender,
+  hoverPoint: PointerGridPoint | null,
+): void {
+  if (!selection.active) return;
+  const { width, height } = project;
+  context.save();
+  if (selection.indices.length > 0) {
+    context.fillStyle = 'rgba(23, 101, 106, 0.16)';
+    selection.indices.forEach((index) => {
+      context.fillRect((index % width) * cellSize, Math.floor(index / width) * cellSize, cellSize, cellSize);
+    });
+    strokeSelectionOutline(context, selection.indices, width, cellSize, zoom, 'rgba(23, 101, 106, 1)');
+  }
+  if (selection.draft) {
+    const { start, end, op } = selection.draft;
+    const left = Math.min(start.x, end.x) * cellSize;
+    const top = Math.min(start.y, end.y) * cellSize;
+    const right = (Math.max(start.x, end.x) + 1) * cellSize;
+    const bottom = (Math.max(start.y, end.y) + 1) * cellSize;
+    const color = op === 'subtract' ? 'rgba(180, 35, 24, 1)' : 'rgba(23, 101, 106, 1)';
+    context.fillStyle = op === 'subtract' ? 'rgba(180, 35, 24, 0.10)' : 'rgba(23, 101, 106, 0.10)';
+    context.fillRect(left, top, right - left, bottom - top);
+    context.beginPath();
+    context.rect(left, top, right - left, bottom - top);
+    strokeDashed(context, zoom, color);
+  } else if (selection.mode === 'wand' && hoverPoint?.cell) {
+    // Preview what a wand click would pick up.
+    const preview = collectWandIndices(getActiveLayerCells(project), width, height, hoverPoint.cell.x, hoverPoint.cell.y, selection.wandScope);
+    if (preview.length > 0) strokeSelectionOutline(context, preview, width, cellSize, zoom, 'rgba(23, 101, 106, 0.55)');
+  }
+  context.restore();
+}
+
+/** Outlines the outer edges of a cell set as one path with a dashed "marching ants" stroke. */
+function strokeSelectionOutline(
+  context: CanvasRenderingContext2D,
+  indices: number[],
+  width: number,
+  cellSize: number,
+  zoom: number,
+  color: string,
+): void {
+  const selected = new Set(indices);
+  context.beginPath();
+  indices.forEach((index) => {
+    const x = index % width;
+    const y = Math.floor(index / width);
+    const left = x * cellSize;
+    const top = y * cellSize;
+    const right = left + cellSize;
+    const bottom = top + cellSize;
+    if (y === 0 || !selected.has(index - width)) {
+      context.moveTo(left, top);
+      context.lineTo(right, top);
+    }
+    if (!selected.has(index + width)) {
+      context.moveTo(left, bottom);
+      context.lineTo(right, bottom);
+    }
+    if (x === 0 || !selected.has(index - 1)) {
+      context.moveTo(left, top);
+      context.lineTo(left, bottom);
+    }
+    if (x === width - 1 || !selected.has(index + 1)) {
+      context.moveTo(right, top);
+      context.lineTo(right, bottom);
+    }
+  });
+  strokeDashed(context, zoom, color);
+}
+
+/** Strokes the current path as a white underlay plus a dashed line, constant on-screen width at any zoom. */
+function strokeDashed(context: CanvasRenderingContext2D, zoom: number, color: string): void {
+  context.setLineDash([]);
+  context.lineWidth = 3.5 / zoom;
+  context.strokeStyle = 'rgba(255, 255, 255, 0.95)';
+  context.stroke();
+  context.setLineDash([5 / zoom, 4 / zoom]);
+  context.lineWidth = 1.75 / zoom;
+  context.strokeStyle = color;
+  context.stroke();
+  context.setLineDash([]);
 }
 
 function collectSameColorIndices(
